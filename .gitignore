@@ -1,0 +1,9 @@
+/.env
+
+# google credentials
+token.json
+credentials.json
+
+# python cache
+__pycache__/
+*.pyc
