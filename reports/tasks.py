@@ -75,14 +75,6 @@ def fetch_dmarc_emails_task(self, user_id: int):
                 created_report_ids.append(str(report.id))
                 parse_dmarc_report_task.delay(str(report.id))
 
-        # Update last_fetched_at
-        try:
-            config = IMAPConfig.objects.get(user=user)
-            config.last_fetched_at = dj_timezone.now()
-            config.save(update_fields=['last_fetched_at'])
-        except IMAPConfig.DoesNotExist:
-            pass
-
         return {
             'status': 'ok',
             'emails_processed': len(emails),

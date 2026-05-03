@@ -1,3 +1,4 @@
+import uuid
 from django.shortcuts import render
 from rest_framework.response import Response
 from rest_framework import status
@@ -5,8 +6,14 @@ from rest_framework.views import APIView
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth.hashers import check_password
+from django.core.mail import send_mail
+from django.utils import timezone
 
-from .models import User
+from django.conf import settings
+from django.utils import timezone
+from datetime import timedelta
+from reports.models import DMARCReport
+from .models import User, PasswordResetToken
 from .serializers import RegisterSerializer, LoginSerializer
 
 
@@ -175,3 +182,118 @@ class UserDetailView(APIView):
 
         user.delete()
         return Response({"message": "User deleted"})
+
+
+class PasswordResetRequestView(APIView):
+    """POST /api/auth/password-reset/ — kirim link reset ke email"""
+    permission_classes = [AllowAny]
+ 
+    def post(self, request):
+        email = request.data.get("email")
+ 
+        if not email:
+            return Response({"detail": "Email wajib diisi."}, status=400)
+ 
+        try:
+            user = User.objects.get(email=email)
+        except User.DoesNotExist:
+            # Jangan beritahu apakah email terdaftar (keamanan)
+            return Response({"message": "Jika email terdaftar, link reset akan dikirim."})
+ 
+        # Hapus token lama milik user ini
+        PasswordResetToken.objects.filter(user=user).delete()
+ 
+        # Buat token baru, berlaku 1 jam
+        token = PasswordResetToken.objects.create(
+            user=user,
+            token=str(uuid.uuid4()),
+            expires_at=timezone.now() + timedelta(hours=1),
+        )
+ 
+        reset_link = f"{settings.FRONTEND_URL}/reset-password?token={token.token}"
+ 
+        send_mail(
+            subject="Reset Password - Dmarclytics",
+            message=(
+                f"Halo {user.name},\n\n"
+                f"Klik link berikut untuk mereset password Anda:\n{reset_link}\n\n"
+                f"Link berlaku selama 1 jam.\n\n"
+                f"Jika Anda tidak merasa meminta reset password, abaikan email ini."
+            ),
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[user.email],
+            fail_silently=False,
+        )
+ 
+        return Response({"message": "Jika email terdaftar, link reset akan dikirim."})
+ 
+ 
+class PasswordResetConfirmView(APIView):
+    """POST /api/auth/password-reset-confirm/ — simpan password baru"""
+    permission_classes = [AllowAny]
+ 
+    def post(self, request):
+        token_str = request.data.get("token")
+        new_password = request.data.get("new_password")
+ 
+        if not token_str or not new_password:
+            return Response({"detail": "Token dan password baru wajib diisi."}, status=400)
+ 
+        if len(new_password) < 8:
+            return Response({"detail": "Password minimal 8 karakter."}, status=400)
+ 
+        try:
+            token = PasswordResetToken.objects.get(token=token_str)
+        except PasswordResetToken.DoesNotExist:
+            return Response({"detail": "Token tidak valid."}, status=400)
+ 
+        if token.expires_at < timezone.now():
+            token.delete()
+            return Response({"detail": "Token sudah kadaluarsa. Silakan minta reset ulang."}, status=400)
+ 
+        user = token.user
+        user.set_password(new_password)
+        user.save()
+ 
+        # Hapus token setelah dipakai
+        token.delete()
+ 
+        return Response({"message": "Password berhasil direset. Silakan login."})
+ 
+class DashboardView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if request.user.role != "admin":
+            return Response({"detail": "Unauthorized"}, status=403)
+
+        total_users = User.objects.count()
+
+        total_admin = User.objects.filter(role="admin").count()
+
+        total_regular_users = User.objects.filter(role="user").count()
+
+        today_users = User.objects.filter(
+            created_at__date=timezone.now().date()
+        ).count()
+
+        recent_users = User.objects.order_by("-created_at")[:8]
+
+        return Response({
+            "total_users": total_users,
+            "total_admin": total_admin,
+            "total_regular_users": total_regular_users,
+            "today_users": today_users,
+
+            "recent_users": [
+                {
+                    "id": u.id,
+                    "user_id": u.user_id,
+                    "name": u.name,
+                    "email": u.email,
+                    "role": u.role,
+                    "created_at": u.created_at,
+                }
+                for u in recent_users
+            ]
+        })
