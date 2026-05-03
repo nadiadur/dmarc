@@ -146,22 +146,198 @@ class DomainDetailView(APIView):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class FetchEmailView(APIView):
+    """
+    POST /api/reports/fetch-email/
+    Trigger fetch email DMARC via Gmail API (token.json).
+    Tidak perlu IMAPConfig lagi.
+    """
     permission_classes = [IsAuthenticated]
-
+ 
     def post(self, request):
-        """POST /api/reports/fetch-email/ — Trigger fetch email DMARC via Celery"""
-        if not IMAPConfig.objects.filter(user=request.user, is_active=True).exists():
+        from pathlib import Path
+        from django.conf import settings
+ 
+        # Cek token.json ada
+        base_dir = getattr(settings, 'BASE_DIR', Path(__file__).resolve().parent.parent)
+        token_path = base_dir / 'token.json'
+ 
+        if not token_path.exists():
             return Response(
-                {"detail": "Konfigurasi IMAP belum ada atau tidak aktif"},
-                status=status.HTTP_400_BAD_REQUEST
+                {
+                    "detail": "token.json tidak ditemukan. "
+                              "Jalankan generate_token.py terlebih dahulu di server."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
             )
+ 
         task = fetch_dmarc_emails_task.delay(request.user.id)
+ 
+        return Response(
+            {
+                "message": "Proses fetch email Gmail dimulai",
+                "task_id": task.id,
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
+ 
+ 
+# ─────────────────────────────────────────────────────────────────────────────
+# Ganti GmailTestView (untuk tombol Test di frontend)
+# ─────────────────────────────────────────────────────────────────────────────
+ 
+class GmailTestView(APIView):
+    """
+    POST /api/imap/test/
+    Test koneksi Gmail API — cek token valid dan bisa akses inbox.
+    """
+    permission_classes = [IsAuthenticated]
+ 
+    def post(self, request):
+        from pathlib import Path
+        from django.conf import settings
+ 
+        base_dir = getattr(settings, 'BASE_DIR', Path(__file__).resolve().parent.parent)
+        token_path = base_dir / 'token.json'
+ 
+        steps = []
+ 
+        # ── STEP 1: Cek token.json ────────────────────────────────────────
+        if not token_path.exists():
+            steps.append({
+                "step": "token", "status": "fail",
+                "detail": f"token.json tidak ditemukan di {token_path}",
+            })
+            return Response({
+                "success": False, "step": "token",
+                "message": "token.json tidak ditemukan. Jalankan generate_token.py terlebih dahulu.",
+                "steps": steps,
+            })
+        steps.append({
+            "step": "token", "status": "ok",
+            "detail": f"token.json ditemukan",
+        })
+ 
+        # ── STEP 2: Load credentials ──────────────────────────────────────
+        try:
+            from google.oauth2.credentials import Credentials
+            from google.auth.transport.requests import Request
+ 
+            SCOPES = [
+                'https://www.googleapis.com/auth/gmail.readonly',
+                'https://www.googleapis.com/auth/gmail.modify',
+            ]
+            creds = Credentials.from_authorized_user_file(str(token_path), SCOPES)
+            steps.append({
+                "step": "credentials", "status": "ok",
+                "detail": "Credentials berhasil dimuat dari token.json",
+            })
+        except Exception as e:
+            steps.append({"step": "credentials", "status": "fail", "detail": str(e)})
+            return Response({
+                "success": False, "step": "credentials",
+                "message": "Gagal membaca token.json. File mungkin rusak, jalankan generate_token.py lagi.",
+                "steps": steps,
+            })
+ 
+        # ── STEP 3: Refresh token jika expired ───────────────────────────
+        try:
+            if creds.expired and creds.refresh_token:
+                creds.refresh(Request())
+                with open(token_path, 'w') as f:
+                    f.write(creds.to_json())
+                steps.append({
+                    "step": "refresh", "status": "ok",
+                    "detail": "Token berhasil di-refresh dan disimpan",
+                })
+            elif not creds.valid:
+                steps.append({
+                    "step": "refresh", "status": "fail",
+                    "detail": "Token tidak valid dan tidak bisa di-refresh",
+                })
+                return Response({
+                    "success": False, "step": "refresh",
+                    "message": "Token Gmail expired. Jalankan generate_token.py lagi.",
+                    "steps": steps,
+                })
+            else:
+                steps.append({
+                    "step": "refresh", "status": "ok",
+                    "detail": "Token masih valid, tidak perlu refresh",
+                })
+        except Exception as e:
+            steps.append({"step": "refresh", "status": "fail", "detail": str(e)})
+            return Response({
+                "success": False, "step": "refresh",
+                "message": f"Gagal refresh token: {str(e)}",
+                "steps": steps,
+            })
+ 
+        # ── STEP 4: Build Gmail service ───────────────────────────────────
+        try:
+            from googleapiclient.discovery import build
+            service = build('gmail', 'v1', credentials=creds)
+            steps.append({
+                "step": "service", "status": "ok",
+                "detail": "Gmail API service berhasil diinisialisasi",
+            })
+        except Exception as e:
+            steps.append({"step": "service", "status": "fail", "detail": str(e)})
+            return Response({
+                "success": False, "step": "service",
+                "message": f"Gagal build Gmail service: {str(e)}",
+                "steps": steps,
+            })
+ 
+        # ── STEP 5: Akses profil & inbox ─────────────────────────────────
+        try:
+            profile = service.users().getProfile(userId='me').execute()
+            email_address  = profile.get('emailAddress', '-')
+            total_messages = profile.get('messagesTotal', 0)
+            threads_total  = profile.get('threadsTotal', 0)
+            steps.append({
+                "step": "inbox", "status": "ok",
+                "detail": f"Berhasil akses inbox {email_address} — {total_messages:,} pesan",
+            })
+        except Exception as e:
+            steps.append({"step": "inbox", "status": "fail", "detail": str(e)})
+            return Response({
+                "success": False, "step": "inbox",
+                "message": f"Gagal akses Gmail: {str(e)}",
+                "steps": steps,
+            })
+ 
+        # ── STEP 6: Cek email dengan attachment belum dibaca ─────────────
+        try:
+            result = service.users().messages().list(
+                userId='me',
+                q='has:attachment is:unread',
+                maxResults=500,
+            ).execute()
+            unread_with_attachment = result.get('resultSizeEstimate', 0)
+            steps.append({
+                "step": "dmarc_check", "status": "ok",
+                "detail": f"~{unread_with_attachment} email belum diproses dengan attachment",
+            })
+        except Exception as e:
+            steps.append({
+                "step": "dmarc_check", "status": "warn",
+                "detail": f"Tidak bisa cek email: {str(e)}",
+            })
+            unread_with_attachment = None
+ 
         return Response({
-            "message": "Proses fetch email dimulai",
-            "task_id": task.id,
-        }, status=status.HTTP_202_ACCEPTED)
-
-
+            "success": True,
+            "message": f"Gmail API berjalan normal! Terhubung sebagai {email_address}.",
+            "steps": steps,
+            "config_summary": {
+                "email": email_address,
+                "total_messages": total_messages,
+                "threads_total": threads_total,
+                "unread_with_attachment": unread_with_attachment,
+                "token_valid": creds.valid,
+            },
+        })
+ 
 class TaskStatusView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -170,15 +346,13 @@ class TaskStatusView(APIView):
         result = AsyncResult(task_id)
         response_data = {
             "task_id": task_id,
-            "status": result.status,   # PENDING / STARTED / SUCCESS / FAILURE / RETRY
+            "status": result.status,
         }
         if result.status == 'SUCCESS':
             response_data['result'] = result.result
         elif result.status == 'FAILURE':
             response_data['error'] = str(result.result)
         return Response(response_data)
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # UPLOAD MANUAL
 # ─────────────────────────────────────────────────────────────────────────────

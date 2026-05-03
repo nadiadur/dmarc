@@ -1,7 +1,7 @@
 import uuid
 from django.contrib.auth.models import AbstractBaseUser, PermissionsMixin, BaseUserManager
 from django.db import models
-
+from django.utils import timezone
 
 class UserManager(BaseUserManager):
     def create_user(self, email, password=None, **extra_fields):
@@ -31,6 +31,7 @@ class User(AbstractBaseUser, PermissionsMixin):
         choices=[("admin", "Admin"), ("user", "User")],
         default="user"
     )
+    created_at = models.DateTimeField(auto_now_add=True)
 
     chat_id = models.CharField(max_length=100, null=True, blank=True)
 
@@ -60,3 +61,18 @@ class Profile(models.Model):
 
     def __str__(self):
         return self.user.email
+ 
+ 
+class PasswordResetToken(models.Model):
+    user = models.ForeignKey(
+        'accounts.User',
+        on_delete=models.CASCADE,
+        related_name='reset_tokens'
+    )
+    token = models.CharField(max_length=255, unique=True)
+    expires_at = models.DateTimeField()
+    created_at = models.DateTimeField(auto_now_add=True)
+ 
+    def __str__(self):
+        return f"ResetToken({self.user.email}, expires={self.expires_at})"
+ 

@@ -47,5 +47,6 @@ urlpatterns = [
     path('notifications/history/', notification_views.NotificationHistoryView.as_view(), name='notif-history'),
 
     path('alerts/<int:alert_id>/delete/', views.AlertDeleteView.as_view(), name='alert-delete'),
+    path('imap/test/', views.GmailTestView.as_view(), name='gmail-test'),
 
 ]
