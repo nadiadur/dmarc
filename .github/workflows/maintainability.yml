@@ -1,0 +1,27 @@
+name: Maintainability Check - Backend
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-backend:
+    name: PyLint - Django Backend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pylint
+
+      - name: Run PyLint
+        run: pylint accounts/ dashboard/ dmarc/ reports/ --fail-under=7.0
