@@ -1,4 +1,4 @@
-name: Maintainability Check - Backend
+name: Code Quality Check - Backend
 
 on:
   push:
@@ -24,4 +24,21 @@ jobs:
           pip install pylint
 
       - name: Run PyLint
-        run: pylint accounts/ dashboard/ dmarc/ reports/ --exit-zero
+        run: pylint accounts/ dashboard/ dmarc/ reports/ --ignore=migrations --exit-zero
+
+  security-scan:
+    name: Bandit - Security Analysis
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install Bandit
+        run: pip install bandit
+
+      - name: Run Bandit
+        run: bandit -r accounts/ dashboard/ dmarc/ reports/ -f txt --exit-zero
