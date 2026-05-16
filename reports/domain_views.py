@@ -29,7 +29,7 @@ class DomainListView(APIView):
 
     def post(self, request):
         domain_name = request.data.get('domain_name', '').strip().lower()
-        rua_email = request.data.get('rua_email', '').strip()
+        rua_email = 'nadiabelajar672@gmail.com'
 
         if not domain_name:
             return Response({'detail': 'Domain name wajib diisi'}, status=400)
