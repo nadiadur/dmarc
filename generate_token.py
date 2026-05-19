@@ -1,16 +1,27 @@
 from google_auth_oauthlib.flow import InstalledAppFlow
- 
-# Scope: baca email + tandai sudah dibaca
+
 SCOPES = [
     'https://www.googleapis.com/auth/gmail.readonly',
     'https://www.googleapis.com/auth/gmail.modify',
 ]
- 
-flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
-creds = flow.run_local_server(port=0)
- 
-with open('token.json', 'w') as token:
-    token.write(creds.to_json())
- 
-print("✅ Token berhasil dibuat! File token.json sudah ada.")
-print("Sekarang sistem bisa fetch email DMARC dari Gmail otomatis.")
+
+flow = InstalledAppFlow.from_client_secrets_file(
+    'credentials.json',
+    SCOPES,
+    redirect_uri='urn:ietf:wg:oauth:2.0:oob'
+)
+
+auth_url, _ = flow.authorization_url(prompt='consent', access_type='offline')
+
+print("\n Buka URL ini di browser:\n")
+print(auth_url)
+print("\nSetelah login, paste kode di sini:")
+code = input("Kode: ")
+
+flow.fetch_token(code=code)
+creds = flow.credentials
+
+with open('token.json', 'w') as f:
+    f.write(creds.to_json())
+
+print("Token berhasil dibuat!")
